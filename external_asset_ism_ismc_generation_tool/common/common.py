@@ -77,13 +77,49 @@ class Common:
             'scr': 'hrv'  # Mapping 'scr' to 'hrv' for Croatian as 'scr' is obsolete now
             }
 
+        # Handle private use language codes (qaa-qtz range)
+        private_use_language_codes = {
+            'qaa': ('qaa', 'Private Use'),
+            'qab': ('qab', 'Private Use'),
+            'qac': ('qac', 'Private Use'),
+            'qad': ('qad', 'Private Use'),
+            'qae': ('qae', 'Private Use'),
+            'qaf': ('qaf', 'Private Use'),
+            'qag': ('qag', 'Private Use'),
+            'qah': ('qah', 'Private Use'),
+            'qai': ('qai', 'Private Use'),
+            'qaj': ('qaj', 'Private Use'),
+            'qak': ('qak', 'Private Use'),
+            'qal': ('qal', 'Private Use'),
+            'qam': ('qam', 'Private Use'),
+            'qan': ('qan', 'Private Use'),
+            'qao': ('qao', 'Private Use'),
+            'qap': ('qap', 'Private Use'),
+            'qaq': ('qaq', 'Private Use'),
+            'qar': ('qar', 'Private Use'),
+            'qas': ('qas', 'Private Use'),
+            'qat': ('qat', 'Private Use'),
+            'qau': ('qau', 'Private Use'),
+            'qav': ('qav', 'Private Use'),
+            'qaw': ('qaw', 'Private Use'),
+            'qax': ('qax', 'Private Use'),
+        }
+
         if language_code in obsolete_language_codes:
             language_code = obsolete_language_codes[language_code]
 
-        language_info = pycountry.languages.lookup(language_code)
-        if language_info:
-            return language_info.alpha_3, language_info.name
-        else:
+        if language_code in private_use_language_codes:
+            return private_use_language_codes[language_code]
+
+        try:
+            language_info = pycountry.languages.lookup(language_code)
+            if language_info:
+                return language_info.alpha_3, language_info.name
+            else:
+                return language_code, language_code
+        except LookupError:
+            # Handle unknown language codes gracefully
+            Common.__logger.warning(f"Unknown language code: {language_code}")
             return language_code, language_code
 
     @staticmethod
