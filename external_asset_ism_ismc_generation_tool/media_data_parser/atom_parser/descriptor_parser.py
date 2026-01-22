@@ -10,6 +10,7 @@ from external_asset_ism_ismc_generation_tool.media_data_parser.model.descriptor.
 from external_asset_ism_ismc_generation_tool.media_data_parser.model.descriptor.es_descriptor_decoder_specific_info import \
     ESDescriptorDecoderSpecificInfo
 from external_asset_ism_ismc_generation_tool.media_data_parser.model.descriptor.dec3_descriptor import DEC3Descriptor
+from external_asset_ism_ismc_generation_tool.media_data_parser.model.descriptor.dac3_descriptor import DAC3Descriptor
 from external_asset_ism_ismc_generation_tool.media_data_parser.model.descriptor.dec3_descriptor_info import DEC3DescriptorInfo
 
 class DescriptorParser:
@@ -99,6 +100,55 @@ class DescriptorParser:
 
             descriptors.append(DEC3Descriptor(codec_private_data.upper(), channel_count, data_rate, sample_rate))
         return descriptors
+
+    @staticmethod
+    def get_dac3_descriptors(dac3_data: bytes) -> List[Descriptor]:
+        descriptors = []
+        reader = BitReader(dac3_data)
+        fscod = reader.get_bits(2)  # sample rate code
+        bsid = reader.get_bits(5)   # bitstream identification
+        bsmod = reader.get_bits(3)  # bitstream mode
+        acmod = reader.get_bits(3)  # audio coding mode
+        lfeon = reader.get_bits(1)  # LFE channel on
+        bit_rate_code = reader.get_bits(5)  # bit rate code
+        reader.get_bits(5)  # reserved
+        
+        # Calculate data rate from bit rate code
+        # AC-3 bit rate table (in kbps) for bit_rate_code values 0–18.
+        # According to the AC-3 specification, bit_rate_code is a 5-bit field (0–31),
+        # where values 19–31 are reserved and do not map to additional bitrates.
+        ac3_bitrates = [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576, 640]
+        if 0 <= bit_rate_code < len(ac3_bitrates):
+            data_rate = ac3_bitrates[bit_rate_code]
+        elif bit_rate_code <= 31:
+            # Reserved bit_rate_code values 19–31 (per AC-3 spec). Use a safe fallback bitrate.
+            DescriptorParser.__logger.warning(
+                f"Reserved AC-3 bit_rate_code {bit_rate_code}; using fallback bitrate {ac3_bitrates[-1]} kbps."
+            )
+            # Preserve existing behavior by falling back to 640 kbps
+            data_rate = ac3_bitrates[-1]
+        else:
+            # This should not occur for a 5-bit field, but handle defensively.
+            DescriptorParser.__logger.warning(
+                f"Invalid AC-3 bit_rate_code {bit_rate_code}; using fallback bitrate {ac3_bitrates[-1]} kbps."
+            )
+            data_rate = ac3_bitrates[-1]
+        
+        channels = DescriptorParser.__get_channels(acmod, lfeon, 0, 0)
+        channel_count = DescriptorParser.__get_channel_count(channels)
+        channel_mask_str = DescriptorParser.__get_channel_mask_str(channels)
+        codec_private_data = DescriptorParser.__get_codec_private_data(channel_mask_str, dac3_data)
+        # According to AC-3, fscod == 3 is reserved and does not correspond to a valid sample rate.
+        if fscod == 3:
+            DescriptorParser.__logger.warning(
+                f"Reserved fscod value 3 encountered in DAC3 descriptor; setting sample rate to 0."
+            )
+            sample_rate = 0
+        else:
+            sample_rate = DEC3DescriptorInfo.dolby_digital_sample_rates[fscod]
+        
+        descriptors.append(DAC3Descriptor(codec_private_data.upper(), channel_count, data_rate, sample_rate))
+        return descriptors        
 
     @staticmethod
     def __get_channels(audio_coding_mod: int,

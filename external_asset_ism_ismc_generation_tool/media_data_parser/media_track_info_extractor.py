@@ -1,3 +1,4 @@
+from collections import namedtuple
 from typing import Tuple
 
 from tools.pymp4.src.pymp4.parser import Box
@@ -5,6 +6,7 @@ from tools.pymp4.src.pymp4.parser import Box
 from external_asset_ism_ismc_generation_tool.common.logger.i_logger import ILogger
 from external_asset_ism_ismc_generation_tool.common.logger.logger import Logger
 from external_asset_ism_ismc_generation_tool.media_data_parser.atom_parser.audio_parser import AudioParser
+from external_asset_ism_ismc_generation_tool.media_data_parser.atom_parser.dac3_parser import DAC3Parser
 from external_asset_ism_ismc_generation_tool.media_data_parser.atom_parser.dec3_parser import DEC3Parser
 from external_asset_ism_ismc_generation_tool.media_data_parser.atom_parser.esds_parser import ESDSParser
 from external_asset_ism_ismc_generation_tool.media_data_parser.atom_parser.stsd_parser import STSDParser
@@ -18,6 +20,9 @@ from external_asset_ism_ismc_generation_tool.media_data_parser.model.track_forma
 from external_asset_ism_ismc_generation_tool.media_data_parser.media_box_extractor.media_box_extractor import MediaBoxExtractor
 from external_asset_ism_ismc_generation_tool.media_data_parser.model.audio_track_data import AudioTrackData
 from external_asset_ism_ismc_generation_tool.common.common import Common
+
+# Simple box-like object for dac3 data
+DAC3Box = namedtuple('DAC3Box', ['data', 'type'])
 
 
 class MediaTrackInfoExtractor:
@@ -134,6 +139,11 @@ class MediaTrackInfoExtractor:
             channels = audio_track_data.channels
             packet_size = str(4 * audio_track_data.data_rate)
             sampling_rate = audio_track_data.sample_rate
+        elif self.audio_parser.audio_format == TrackFormat.AC_3.value:
+            audio_tag = '8192'  # 0x2000 - AC-3
+            channels = audio_track_data.channels
+            packet_size = str(4 * audio_track_data.data_rate)
+            sampling_rate = audio_track_data.sample_rate
         elif self.audio_parser.audio_format == TrackFormat.MP4A.value:
             audio_tag = '255'  # 0xFF - undefined
             channels = self.stsd_parser.get_channels()
@@ -204,6 +214,53 @@ class MediaTrackInfoExtractor:
     def __get_audio_parser(self, stbl_atom: Box) -> AudioParser:
         if self.stsd_parser.stsd_atom_entries[0].format == b'ec-3':
             return DEC3Parser(MediaBoxExtractor.get_mp4_sub_box(stbl_atom, 'dec3'))
+        elif self.stsd_parser.stsd_atom_entries[0].format == b'ac-3':
+            dac3_box = MediaBoxExtractor.get_mp4_sub_box(stbl_atom, 'dac3')
+            if not dac3_box:
+                # AC-3 box might be embedded in the stsd entry data
+                dac3_box = self.__extract_dac3_from_entry()
+            if not dac3_box:
+                MediaTrackInfoExtractor.__logger.error('Unable to locate dac3 box for AC-3 audio track')
+                raise ValueError('Missing dac3 box for AC-3 audio track')
+            return DAC3Parser(dac3_box)
         elif self.stsd_parser.stsd_atom_entries[0].format == b'mp4a':
             return ESDSParser(MediaBoxExtractor.get_mp4_sub_box(stbl_atom, 'esds'))
+        return None
+
+    def __extract_dac3_from_entry(self) -> Box:
+        """Extract dac3 box from STSD entry data for AC-3 audio"""
+        entry = self.stsd_parser.stsd_atom_entries[0]
+        if hasattr(entry, 'data') and entry.data:
+            entry_data = entry.data
+            entry_len = len(entry_data)
+            idx = entry_data.find(b'dac3')
+            if idx != -1 and idx >= 4 and idx + 4 <= entry_len:
+                # Read the size field (4 bytes immediately before 'dac3')
+                dac3_size = int.from_bytes(entry_data[idx - 4:idx], 'big')
+                # Basic sanity check: box size must at least contain size(4) + type(4)
+                if dac3_size < 8:
+                    MediaTrackInfoExtractor.__logger.warning(
+                        f'Invalid dac3 box size {dac3_size} found in STSD entry'
+                    )
+                    return None
+                box_start = idx - 4
+                box_end = box_start + dac3_size
+                # Ensure the declared box bounds are within the entry data
+                if box_end > entry_len:
+                    MediaTrackInfoExtractor.__logger.warning(
+                        f'dac3 box size {dac3_size} exceeds entry data length {entry_len}'
+                    )
+                    return None
+                payload_start = idx + 4  # skip the 'dac3' type
+                payload_end = box_end
+                if payload_start >= payload_end:
+                    MediaTrackInfoExtractor.__logger.warning(
+                        'Computed empty or invalid payload range for dac3 box'
+                    )
+                    return None
+                dac3_data = entry_data[payload_start:payload_end]
+                MediaTrackInfoExtractor.__logger.info(
+                    f'Successfully extracted dac3 box from STSD entry data (size: {len(dac3_data)} bytes)'
+                )
+                return DAC3Box(data=dac3_data, type=b'dac3')
         return None
